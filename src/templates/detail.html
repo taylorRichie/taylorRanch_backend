@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="detail-view">
+    <img src="{{ image.cdn_url }}" alt="{{ image.capture_time }}">
+    <div class="metadata">
+        <h2>{{ image.capture_time.strftime('%B %d, %I:%M %p') }}</h2>
+        <h3>{{ image.primary_location }}{% if image.secondary_location %} - {{ image.secondary_location }}{% endif %}</h3>
+        
+        <div class="weather-data">
+            {% if image.temperature %}
+            <div class="weather-item">
+                <span class="label">Temperature:</span>
+                <span class="value">{{ image.temperature }}° {{ image.temperature_unit }}</span>
+            </div>
+            {% endif %}
+            
+            {% if image.wind_speed %}
+            <div class="weather-item">
+                <span class="label">Wind:</span>
+                <span class="value">{{ image.wind_direction }} {{ image.wind_speed }} {{ image.wind_unit }}</span>
+            </div>
+            {% endif %}
+            
+            {% if image.raw_metadata.pressure %}
+            <div class="weather-item">
+                <span class="label">Pressure:</span>
+                <span class="value">{{ image.raw_metadata.pressure.value }} {{ image.raw_metadata.pressure.unit }}</span>
+            </div>
+            {% endif %}
+            
+            {% if image.raw_metadata.sun_status %}
+            <div class="weather-item">
+                <span class="label">Sun:</span>
+                <span class="value">{{ image.raw_metadata.sun_status }}</span>
+            </div>
+            {% endif %}
+            
+            {% if image.raw_metadata.moon_phase %}
+            <div class="weather-item">
+                <span class="label">Moon:</span>
+                <span class="value">{{ image.raw_metadata.moon_phase }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

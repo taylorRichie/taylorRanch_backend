@@ -1,0 +1,30 @@
+<div class="detail-view">
+    <img src="{{ url_for('static', filename=image.file_path) }}" alt="{{ image.reveal_timestamp }}">
+    <div class="metadata">
+        <h2>{{ image.reveal_timestamp.strftime('%B %d, %I:%M %p') }}</h2>
+        <h3>{{ image.location }}</h3>
+        
+        <div class="weather-data">
+            <div class="weather-item">
+                <span class="label">Temperature:</span>
+                <span class="value">{{ image.temperature }}° {{ image.temperature_unit }}</span>
+            </div>
+            <div class="weather-item">
+                <span class="label">Wind:</span>
+                <span class="value">{{ image.wind_direction }} {{ image.wind_speed }} {{ image.pressure_unit }}</span>
+            </div>
+            <div class="weather-item">
+                <span class="label">Pressure:</span>
+                <span class="value">{{ image.pressure }} {{ image.pressure_unit }}</span>
+            </div>
+            <div class="weather-item">
+                <span class="label">Sun:</span>
+                <span class="value">{{ image.sun_status }}</span>
+            </div>
+            <div class="weather-item">
+                <span class="label">Moon:</span>
+                <span class="value">{{ image.moon_phase }}</span>
+            </div>
+        </div>
+    </div>
+</div> 

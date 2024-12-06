@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="gallery-grid">
+    {% for image in images %}
+    <div class="image-card" data-id="{{ image.id }}">
+        <a href="{{ url_for('reveal.image_detail', image_id=image.id) }}">
+            <img src="{{ image.cdn_url }}" 
+                 alt="{{ image.capture_time }}"
+                 onerror="console.log('Failed to load image:', this.src)">
+        </a>
+        <div class="metadata">
+            <p class="timestamp">{{ image.capture_time.strftime('%B %d, %I:%M %p') }}</p>
+            <p class="location">{{ image.primary_location }}{% if image.secondary_location %} - {{ image.secondary_location }}{% endif %}</p>
+            {% if image.temperature %}
+            <p class="weather">{{ image.temperature }}°{{ image.temperature_unit }}</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
