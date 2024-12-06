@@ -11,6 +11,7 @@ from botocore.client import Config
 import mimetypes
 import uuid
 from urllib.parse import urljoin
+import argparse
 
 # Load environment variables from parent directory
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
@@ -143,7 +144,7 @@ class RevealSync:
                 reveal_id = await card.get_attribute('id')
                 if not reveal_id:
                     print("Could not get reveal_id, skipping...")
-                    return
+                    return False
                     
                 print(f"Processing card ID: {reveal_id}")
                 await self.take_screenshot(f"before_click_{reveal_id}")
@@ -157,7 +158,7 @@ class RevealSync:
                     await self.take_screenshot("image_detail_view")
                 except Exception as e:
                     print(f"Error clicking card or waiting for sidebar: {e}")
-                    return
+                    return False
             else:
                 # Arrow navigation case - get reveal_id from current detail view
                 try:
@@ -168,16 +169,15 @@ class RevealSync:
                     detail_image = await self.page.wait_for_selector('img#single-photo', timeout=ELEMENT_TIMEOUT)
                     if not detail_image:
                         print("Could not find detail view image")
-                        return
+                        return False
                         
                     # Get the image source URL
                     src = await detail_image.get_attribute('src')
                     if not src:
                         print("Could not get image source URL")
-                        return
+                        return False
                         
                     # Extract reveal_id from the URL
-                    # URL format: .../864049054168226-100-4-12052024182210-V-W1018634.JPG?...
                     try:
                         # Get the filename part before the query parameters
                         filename = src.split('?')[0].split('/')[-1]
@@ -186,19 +186,16 @@ class RevealSync:
                         print(f"Extracted reveal_id from image: {reveal_id}")
                     except Exception as e:
                         print(f"Could not extract reveal_id from URL: {e}")
-                        return
+                        return False
                     
                     # Check if we've already processed this ID
                     if reveal_id in self.processed_ids:
                         print(f"Already processed {reveal_id}, skipping...")
-                        # Still need to navigate to next image
-                        await self.page.keyboard.press('ArrowRight')
-                        await self.page.wait_for_timeout(2000)
-                        return
+                        return False, True  # Second boolean indicates duplicate found
                         
                 except Exception as e:
                     print(f"Error getting reveal_id from detail view: {e}")
-                    return
+                    return False
 
             # Add to processed IDs set
             self.processed_ids.add(reveal_id)
@@ -210,7 +207,7 @@ class RevealSync:
                 await self.take_screenshot("metadata_captured")
             else:
                 print("Failed to extract metadata")
-                return
+                return False
 
             # Download image
             image_path = await self.download_image(reveal_id)
@@ -218,33 +215,29 @@ class RevealSync:
                 print("Image downloaded successfully")
                 await self.take_screenshot("after_download")
                 
-                # Store in database
+                # Validate and store in database
                 try:
-                    await self.store_image_data(metadata, image_path, reveal_id)
-                    print("Data stored in database")
+                    is_valid, is_duplicate = await self.validate_image(image_path, reveal_id)
+                    if is_valid:
+                        await self.store_image_data(metadata, image_path, reveal_id)
+                        print("Data stored in database")
+                        return True, False
+                    else:
+                        print("Image validation failed or duplicate found")
+                        if os.path.exists(image_path):
+                            os.unlink(image_path)
+                        return False, is_duplicate
                 except Exception as e:
                     print(f"Error storing data: {e}")
-                    return
+                    return False, False
 
-            if not card:  # Only navigate if we're not processing the first card
-                # Navigate to next image using right arrow key
-                try:
-                    await self.page.keyboard.press('ArrowRight')
-                    print("Navigated to next image")
-                    await self.page.wait_for_timeout(2000)  # Wait for transition
-                    await self.take_screenshot("next_image")
-                    
-                    # Verify we're in a new detail view
-                    await self.page.wait_for_selector('div[data-testid="PhotoSideBar-container"]', timeout=ELEMENT_TIMEOUT)
-                except Exception as e:
-                    print(f"Error navigating to next image: {e}")
-                    raise  # Propagate error to stop processing if navigation fails
-            
+            return False, False
+
         except Exception as e:
             print(f"Error processing image: {e}")
             if reveal_id:
                 await self.take_screenshot(f"error_processing_{reveal_id}")
-            raise
+            return False, False
 
     async def extract_metadata(self):
         """Extract weather and other metadata from detailed view"""
@@ -261,8 +254,28 @@ class RevealSync:
             try:
                 timestamp_element = await sidebar.query_selector('h6.text-s1')
                 if timestamp_element:
-                    metadata['timestamp'] = await timestamp_element.text_content()
-                    print(f"Found timestamp: {metadata['timestamp']}")
+                    timestamp_str = await timestamp_element.text_content()
+                    print(f"Raw timestamp: {timestamp_str}")
+                    
+                    # Parse the timestamp without year, add current year
+                    try:
+                        # Remove any extra whitespace and handle potential line breaks
+                        timestamp_str = ' '.join(timestamp_str.strip().split())
+                        # Parse without year first
+                        partial_date = datetime.strptime(timestamp_str, "%B %d, %I:%M %p")
+                        # Add current year
+                        current_year = datetime.now().year
+                        capture_time = partial_date.replace(year=current_year)
+                        
+                        # If the date is in the future (due to year rollover), subtract a year
+                        if capture_time > datetime.now():
+                            capture_time = capture_time.replace(year=current_year - 1)
+                            
+                        metadata['timestamp'] = capture_time.strftime("%B %d, %Y %I:%M %p")
+                        print(f"Parsed timestamp: {metadata['timestamp']}")
+                    except ValueError as e:
+                        print(f"Error parsing timestamp '{timestamp_str}': {e}")
+                        metadata['timestamp'] = datetime.now().strftime("%B %d, %Y %I:%M %p")
             except Exception as e:
                 print(f"Error getting timestamp: {e}")
 
@@ -534,7 +547,7 @@ class RevealSync:
         try:
             if not os.path.exists(image_path):
                 print(f"Image file does not exist: {image_path}")
-                return False
+                return False, False
 
             # Calculate hash of new image
             with open(image_path, 'rb') as f:
@@ -553,13 +566,13 @@ class RevealSync:
             
             if result:
                 print(f"Image already exists in database (ID: {result[0]}, CDN URL: {result[1]})")
-                return False
+                return False, True  # Second boolean indicates duplicate found
                 
-            return True
+            return True, False  # Image is valid and not a duplicate
 
         except Exception as e:
             print(f"Error validating image: {e}")
-            return False
+            return False, False
         finally:
             if 'cursor' in locals():
                 cursor.close()
@@ -571,14 +584,33 @@ class RevealSync:
         cursor.close()
         return result[0] if result else None
 
-    async def sync(self, force_check=False):
+    async def sync(self, force_check=False, backfill=False):
         try:
             self.cleanup_directories()
             await self.connect_db()
             
-            # Get the latest image_id from our database
-            latest_id = await self.get_latest_image_id()
+            # Get the latest image_id and count from our database
+            cursor = self.db_conn.cursor()
+            cursor.execute("SELECT reveal_id FROM images ORDER BY created_at DESC LIMIT 1")
+            latest_result = cursor.fetchone()
+            cursor.execute("SELECT COUNT(*) FROM images")
+            current_count = cursor.fetchone()[0]
+            cursor.close()
+            
+            latest_id = latest_result[0] if latest_result else None
             print(f"Latest image ID in database: {latest_id}")
+            print(f"Current record count: {current_count}")
+            
+            # Determine target count based on current state
+            if current_count == 0:
+                target_count = 150  # Initial load
+                print("Initial load - will get first 150 images")
+            elif backfill:
+                target_count = None  # No limit when backfilling
+                print("Backfill mode - will continue until no more images or error")
+            else:
+                target_count = None  # Normal incremental mode
+                print("Incremental mode - will get only new images")
             
             async with async_playwright() as p:
                 self.browser = await p.chromium.launch(headless=True)
@@ -598,9 +630,8 @@ class RevealSync:
                     
                 print(f"Found {len(cards)} total cards")
                 
-                target_count = 2  # Temporarily set to 2 for testing
                 successful_count = 0
-                max_attempts = 10  # Reduced for testing
+                max_attempts = 200  # Increased for production
                 attempt = 0
                 found_existing = False
                 
@@ -615,59 +646,44 @@ class RevealSync:
                         print("No new images to process")
                         return
                         
-                    await self.process_image(first_card)
-                    successful_count += 1
-                    print(f"Successfully processed {successful_count} of {target_count} images")
+                    success, is_duplicate = await self.process_image(first_card)
+                    if success:
+                        successful_count += 1
+                        print(f"Successfully processed {successful_count} images")
+                    if is_duplicate and not force_check:
+                        print("Found duplicate in first image, stopping sync")
+                        return
+                        
                 except Exception as e:
                     print(f"Error processing first card: {e}")
                 
                 # Process remaining images until we hit target or find existing
-                while successful_count < target_count and attempt < max_attempts and not found_existing:
+                while (target_count is None or successful_count < target_count) and attempt < max_attempts and not found_existing:
                     attempt += 1
                     try:
-                        print(f"\nProcessing image {successful_count + 1} of {target_count} (attempt {attempt})")
+                        print(f"\nProcessing image {successful_count + 1} {'of ' + str(target_count) if target_count else '(incremental)'} (attempt {attempt})")
                         
-                        # Get current image ID before processing
-                        current_id = await self.get_current_image_id()
-                        print(f"Current image ID: {current_id}")
+                        success, is_duplicate = await self.process_image(None)
                         
-                        # If we hit an existing image and we're not force checking, stop
-                        if not force_check and latest_id and current_id == latest_id:
-                            print(f"Reached existing image {current_id}, stopping sync")
+                        if success:
+                            successful_count += 1
+                            print(f"Successfully processed {successful_count} images")
+                        
+                        if is_duplicate and not force_check:
+                            print("Found duplicate image, stopping sync")
                             found_existing = True
                             break
-                        
-                        # Get current record count
-                        cursor = self.db_conn.cursor()
-                        cursor.execute("SELECT COUNT(*) FROM images")
-                        current_count = cursor.fetchone()[0]
-                        cursor.close()
-                        
-                        # Process next image
-                        await self.process_image(None)
-                        
-                        # Check if we successfully added a new record
-                        cursor = self.db_conn.cursor()
-                        cursor.execute("SELECT COUNT(*) FROM images")
-                        new_count = cursor.fetchone()[0]
-                        cursor.close()
-                        
-                        if new_count > current_count:
-                            successful_count += 1
-                            print(f"Successfully processed {successful_count} of {target_count} images")
-                        else:
-                            print("No new record added, continuing to next image")
                             
                     except Exception as e:
                         print(f"Error processing image: {e}")
                         # Continue to next attempt
                 
-                if successful_count == target_count:
+                if target_count and successful_count == target_count:
                     print(f"\nSuccessfully processed all {target_count} images")
                 elif found_existing:
                     print(f"\nProcessed {successful_count} new images before finding existing content")
                 else:
-                    print(f"\nOnly processed {successful_count} images after {attempt} attempts")
+                    print(f"\nProcessed {successful_count} images after {attempt} attempts")
 
         except Exception as e:
             print(f"Sync error: {e}")
@@ -690,8 +706,19 @@ class RevealSync:
         return None
 
 async def main():
+    parser = argparse.ArgumentParser(description='Sync images from Reveal camera')
+    parser.add_argument('--backfill', action='store_true', help='Get older images beyond the initial 150')
+    parser.add_argument('--force', action='store_true', help='Force check all images even if they exist')
+    args = parser.parse_args()
+
     syncer = RevealSync()
-    await syncer.sync()
+    if args.backfill:
+        print("Running in backfill mode - will attempt to get older images")
+        # Start from the oldest image we have and work backwards
+        await syncer.sync(force_check=True, backfill=True)
+    else:
+        print("Running in normal mode - will only get new images")
+        await syncer.sync(force_check=args.force)
 
 if __name__ == "__main__":
     asyncio.run(main()) 

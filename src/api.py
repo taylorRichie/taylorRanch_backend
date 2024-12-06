@@ -33,7 +33,7 @@ def get_images():
                    temperature, temperature_unit, wind_speed, wind_direction, wind_unit,
                    raw_metadata, created_at 
             FROM images 
-            ORDER BY created_at DESC
+            ORDER BY capture_time DESC
         """)
         images = cur.fetchall()
         cur.close()
@@ -41,11 +41,13 @@ def get_images():
 
         image_list = []
         for img in images:
+            capture_time = img[3]
             image_list.append({
                 'id': img[0],
                 'reveal_id': img[1],
                 'cdn_url': img[2],
-                'capture_time': img[3].isoformat() if img[3] else None,
+                'capture_time': capture_time.isoformat() if capture_time else None,
+                'capture_time_formatted': capture_time.strftime('%B %d, %I:%M %p') if capture_time else None,
                 'primary_location': img[4],
                 'secondary_location': img[5],
                 'temperature': img[6],
