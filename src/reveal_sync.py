@@ -38,6 +38,7 @@ MAX_UPLOAD_RETRIES = 3
 RETRY_DELAY = 5  # seconds
 ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png']
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_RECORDS = 300  # Maximum number of records to sync
 
 class RevealSync:
     def __init__(self):
@@ -160,9 +161,10 @@ class RevealSync:
                     print(f"Error clicking card or waiting for sidebar: {e}")
                     return False
             else:
-                # Arrow navigation case - get reveal_id from current detail view
+                # Arrow navigation case - press right arrow key
                 try:
-                    # Wait for the detail view to be fully loaded
+                    await self.page.keyboard.press('ArrowRight')
+                    await self.page.wait_for_timeout(2000)  # Wait for navigation
                     await self.page.wait_for_selector('div[data-testid="PhotoSideBar-container"]', timeout=ELEMENT_TIMEOUT)
                     
                     # Get the image element by ID
@@ -586,6 +588,7 @@ class RevealSync:
 
     async def sync(self, force_check=False, backfill=False):
         try:
+            print("\nStarting sync process...")
             self.cleanup_directories()
             await self.connect_db()
             
@@ -601,17 +604,6 @@ class RevealSync:
             print(f"Latest image ID in database: {latest_id}")
             print(f"Current record count: {current_count}")
             
-            # Determine target count based on current state
-            if current_count == 0:
-                target_count = 150  # Initial load
-                print("Initial load - will get first 150 images")
-            elif backfill:
-                target_count = None  # No limit when backfilling
-                print("Backfill mode - will continue until no more images or error")
-            else:
-                target_count = None  # Normal incremental mode
-                print("Incremental mode - will get only new images")
-            
             async with async_playwright() as p:
                 self.browser = await p.chromium.launch(headless=True)
                 self.context = await self.browser.new_context(
@@ -619,7 +611,7 @@ class RevealSync:
                     user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
                 )
                 self.page = await self.context.new_page()
-
+                
                 await self.login()
                 
                 # Get all available cards
@@ -631,7 +623,7 @@ class RevealSync:
                 print(f"Found {len(cards)} total cards")
                 
                 successful_count = 0
-                max_attempts = 200  # Increased for production
+                max_attempts = 200
                 attempt = 0
                 found_existing = False
                 
@@ -658,10 +650,10 @@ class RevealSync:
                     print(f"Error processing first card: {e}")
                 
                 # Process remaining images until we hit target or find existing
-                while (target_count is None or successful_count < target_count) and attempt < max_attempts and not found_existing:
+                while successful_count < MAX_RECORDS and attempt < max_attempts and not found_existing:
                     attempt += 1
                     try:
-                        print(f"\nProcessing image {successful_count + 1} {'of ' + str(target_count) if target_count else '(incremental)'} (attempt {attempt})")
+                        print(f"\nProcessing image {successful_count + 1} of {MAX_RECORDS} (attempt {attempt})")
                         
                         success, is_duplicate = await self.process_image(None)
                         
@@ -673,18 +665,18 @@ class RevealSync:
                             print("Found duplicate image, stopping sync")
                             found_existing = True
                             break
-                            
+                        
                     except Exception as e:
                         print(f"Error processing image: {e}")
                         # Continue to next attempt
                 
-                if target_count and successful_count == target_count:
-                    print(f"\nSuccessfully processed all {target_count} images")
+                if successful_count == MAX_RECORDS:
+                    print(f"\nSuccessfully processed all {MAX_RECORDS} images")
                 elif found_existing:
                     print(f"\nProcessed {successful_count} new images before finding existing content")
                 else:
                     print(f"\nProcessed {successful_count} images after {attempt} attempts")
-
+                
         except Exception as e:
             print(f"Sync error: {e}")
             raise e
@@ -707,18 +699,12 @@ class RevealSync:
 
 async def main():
     parser = argparse.ArgumentParser(description='Sync images from Reveal camera')
-    parser.add_argument('--backfill', action='store_true', help='Get older images beyond the initial 150')
     parser.add_argument('--force', action='store_true', help='Force check all images even if they exist')
     args = parser.parse_args()
 
     syncer = RevealSync()
-    if args.backfill:
-        print("Running in backfill mode - will attempt to get older images")
-        # Start from the oldest image we have and work backwards
-        await syncer.sync(force_check=True, backfill=True)
-    else:
-        print("Running in normal mode - will only get new images")
-        await syncer.sync(force_check=args.force)
+    print("Running sync to get 300 records...")
+    await syncer.sync(force_check=args.force)
 
 if __name__ == "__main__":
     asyncio.run(main()) 

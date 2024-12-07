@@ -26,15 +26,65 @@ def get_db_connection():
 @app.route('/reveal_gallery/api/images', methods=['GET'])
 def get_images():
     try:
+        # Check if specific IDs were requested
+        ids_param = request.args.get('ids')
+        if ids_param:
+            # Parse comma-separated IDs
+            try:
+                ids = [int(id.strip()) for id in ids_param.split(',')]
+            except ValueError:
+                return jsonify({'error': 'Invalid ID format'}), 400
+                
+            # Build query for specific IDs
+            query = """
+                SELECT id, reveal_id, cdn_url, capture_time, primary_location, secondary_location,
+                       temperature, temperature_unit, wind_speed, wind_direction, wind_unit,
+                       raw_metadata, created_at 
+                FROM images 
+                WHERE id = ANY(%s)
+                ORDER BY array_position(%s, id)
+            """
+            params = [ids, ids]  # Pass ids twice: once for WHERE, once for ORDER BY
+            
+        else:
+            # Get sorting parameters
+            sort_by = request.args.get('sort_by', 'capture_time')
+            sort_order = request.args.get('sort_order', 'desc').upper()
+            
+            # Get date range parameters
+            start_date = request.args.get('start_date')
+            end_date = request.args.get('end_date')
+            
+            # Validate sort parameters
+            allowed_sort_fields = ['capture_time', 'created_at', 'temperature', 'primary_location']
+            if sort_by not in allowed_sort_fields:
+                sort_by = 'capture_time'
+            if sort_order not in ['ASC', 'DESC']:
+                sort_order = 'DESC'
+                
+            # Build the query with dynamic sorting and date filtering
+            query = """
+                SELECT id, reveal_id, cdn_url, capture_time, primary_location, secondary_location,
+                       temperature, temperature_unit, wind_speed, wind_direction, wind_unit,
+                       raw_metadata, created_at 
+                FROM images 
+                WHERE 1=1
+            """
+            params = []
+            
+            # Add date range filters if provided
+            if start_date:
+                query += " AND capture_time >= %s"
+                params.append(start_date)
+            if end_date:
+                query += " AND capture_time <= %s"
+                params.append(end_date)
+                
+            query += f" ORDER BY {sort_by} {sort_order}"
+
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
-            SELECT id, reveal_id, cdn_url, capture_time, primary_location, secondary_location,
-                   temperature, temperature_unit, wind_speed, wind_direction, wind_unit,
-                   raw_metadata, created_at 
-            FROM images 
-            ORDER BY capture_time DESC
-        """)
+        cur.execute(query, params)
         images = cur.fetchall()
         cur.close()
         conn.close()
@@ -59,7 +109,24 @@ def get_images():
                 'created_at': img[12].isoformat() if img[12] else None
             })
 
-        return jsonify({'images': image_list})
+        # Build response
+        response = {'images': image_list}
+        
+        # Include sorting info if not using IDs
+        if not ids_param:
+            response.update({
+                'sorting': {
+                    'sort_by': sort_by,
+                    'sort_order': sort_order
+                },
+                'filtering': {
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'total_records': len(image_list)
+                }
+            })
+
+        return jsonify(response)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

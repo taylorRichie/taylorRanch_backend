@@ -57,3 +57,24 @@ log/
 # Virtual environment
 venv/
 ENV/
+
+# Backup files
+*.sql.gz
+*.zip
+
+# Additional directories
+TaylorRanch/
+aws/
+gallery/
+images/
+
+# AWS CLI
+awscliv2.zip
+
+# SSH keys
+git
+git.pub
+
+# Temporary files
+"tgres psql -c \"l\" | grep reveal_gallery"
+"src/i ON w.image_id = i.id"
