@@ -627,6 +627,8 @@ class RevealSync:
                 attempt = 0
                 found_existing = False
                 
+                new_image_ids = []  # Track new images
+                
                 # Process first card
                 first_card = cards[0]
                 try:
@@ -640,8 +642,11 @@ class RevealSync:
                         
                     success, is_duplicate = await self.process_image(first_card)
                     if success:
-                        successful_count += 1
-                        print(f"Successfully processed {successful_count} images")
+                        current_id = await self.get_current_image_id()
+                        if current_id:  # Only add if we got a valid ID
+                            new_image_ids.append(current_id)
+                            successful_count += 1
+                            print(f"Successfully processed {successful_count} images")
                     if is_duplicate and not force_check:
                         print("Found duplicate in first image, stopping sync")
                         return
@@ -658,8 +663,11 @@ class RevealSync:
                         success, is_duplicate = await self.process_image(None)
                         
                         if success:
-                            successful_count += 1
-                            print(f"Successfully processed {successful_count} images")
+                            current_id = await self.get_current_image_id()
+                            if current_id:  # Only add if we got a valid ID
+                                new_image_ids.append(current_id)
+                                successful_count += 1
+                                print(f"Successfully processed {successful_count} images")
                         
                         if is_duplicate and not force_check:
                             print("Found duplicate image, stopping sync")
@@ -676,6 +684,9 @@ class RevealSync:
                     print(f"\nProcessed {successful_count} new images before finding existing content")
                 else:
                     print(f"\nProcessed {successful_count} images after {attempt} attempts")
+                
+                print(f"New image IDs: {new_image_ids}")
+                return new_image_ids  # Return the list of new IDs
                 
         except Exception as e:
             print(f"Sync error: {e}")
